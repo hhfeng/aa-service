@@ -1,0 +1,17 @@
+{
+  "cwe_kb": {
+    "name": "CWE Pattern Kit",
+    "graphify_out": "/home/xfz/kb/cwe_kb/graphify-out",
+    "raw": "/home/xfz/kb/cwe_kb/raw"
+  },
+  "graphify_kb": {
+    "name": "graphify Source",
+    "graphify_out": "/home/xfz/kb/graphify_kb/graphify-out",
+    "raw": "/home/xfz/kb/graphify_kb/raw"
+  },
+  "cve_dashboard_kb": {
+    "name": "CVE Dashboard",
+    "graphify_out": "/home/xfz/kb/cve_dashboard_kb/graphify-out",
+    "raw": "/home/xfz/kb/cve_dashboard_kb/raw"
+  }
+}
