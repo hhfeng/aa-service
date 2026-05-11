@@ -50,7 +50,7 @@ jobs:
           mkdir release
           cp dist/aa-service release/
           cp kbs.json release/
-          cp README.md release/
+          cp README-RELEASE.md release/README.md
 
       - name: Prepare release folder (Windows)
         if: runner.os == 'Windows'
@@ -58,7 +58,7 @@ jobs:
           mkdir release
           copy dist\aa-service.exe release\
           copy kbs.json release\
-          copy README.md release\
+          copy README-RELEASE.md release\README.md
 
       - name: Create Archive (Linux)
         if: runner.os == 'Linux'
