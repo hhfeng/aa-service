@@ -421,8 +421,11 @@ if __name__ == "__main__":
             file=sys.stderr,
         )
 
+    if getattr(sys, 'frozen', False):
+        args.reload = False
+
     uvicorn.run(
-        "main:app",
+        app,
         host=args.host,
         port=args.port,
         reload=args.reload,
