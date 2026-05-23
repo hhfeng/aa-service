@@ -1,9 +1,8 @@
 [project]
 name = "aa-service"
-version = "0.1.5"
+version = "0.1.6"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110.0",
     "graphifyy",
@@ -11,7 +10,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-graphifyy = { path = "/home/xfz/aa/aa-graphify", editable = true }
+graphifyy = { git = "https://github.com/hhfeng/aa-graphify" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
