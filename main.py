@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 import auth
@@ -122,12 +122,30 @@ async def discovery(request: Request, _: None = Depends(auth.check_api_key)):
                 "description": "GRAPH_REPORT.md as plain text. Contains god nodes, surprising connections, and suggested questions.",
             },
             {
+                "method": "GET",
+                "path": "/kb/{kb_id}/dashboard",
+                "description": "Analysis dashboard as self-contained HTML. Open in a browser for interactive risk tables, god nodes, surprises, and community breakdown. Only available for KBs built with --domain.",
+            },
+            {
+                "method": "GET",
+                "path": "/kb/{kb_id}/search?q=<query>&limit=20",
+                "description": (
+                    "FTS5 ranked full-text search over node labels, descriptions, and source files. "
+                    "Returns BM25-scored hits. Best for: discovering which nodes exist, listing "
+                    "candidates before drilling in, broad keyword sweeps. "
+                    "Does NOT traverse relationships — use /query for that."
+                ),
+            },
+            {
                 "method": "POST",
                 "path": "/kb/{kb_id}/query",
                 "description": (
                     "BFS or DFS traversal of the graph to answer a question. "
+                    "Uses FTS to find seed nodes, then walks relationships for context. "
                     "Returns the relevant subgraph as structured data and a traversal_text string "
-                    "ready for an LLM to synthesize into an answer."
+                    "ready for an LLM to synthesize into an answer. "
+                    "Best for: understanding HOW things connect, tracing dependencies, "
+                    "answering 'why' and 'how' questions. Subsumes /search for seed finding."
                 ),
                 "request_body": {
                     "question": "string — the question to answer",
@@ -228,6 +246,28 @@ async def discovery(request: Request, _: None = Depends(auth.check_api_key)):
                 },
             },
         ],
+        "workflow": {
+            "description": (
+                "Recommended agent workflow for investigating a knowledge base. "
+                "Follow these steps in order for best results."
+            ),
+            "steps": [
+                {"step": 1, "action": "search", "endpoint": "/kb/{kb_id}/search?q=<topic>",
+                 "purpose": "Discover which nodes exist. Cast a wide net with keywords."},
+                {"step": 2, "action": "explain", "endpoint": "/kb/{kb_id}/explain",
+                 "purpose": "Pick interesting hits and inspect their direct connections."},
+                {"step": 3, "action": "query", "endpoint": "/kb/{kb_id}/query",
+                 "purpose": "Ask a relationship question. Traverses the graph from FTS-matched seeds."},
+                {"step": 4, "action": "dashboard", "endpoint": "/kb/{kb_id}/dashboard",
+                 "purpose": "Open the HTML dashboard for a visual overview of risks, communities, and god nodes."},
+            ],
+            "tips": [
+                "Use /search when you don't know what's in the graph yet.",
+                "Use /query when you have a specific relationship question (it uses FTS internally for seed selection).",
+                "Use /explain to understand a single node's neighborhood before a broader /query.",
+                "/query subsumes /search for seed finding — if you only have time for one call, use /query.",
+            ],
+        },
     }
 
 
@@ -293,6 +333,51 @@ async def get_report(kb_id: str, _: None = Depends(auth.check_api_key)):
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="GRAPH_REPORT.md not found.")
     return report_path.read_text()
+
+
+@app.get("/kb/{kb_id}/dashboard", response_class=HTMLResponse)
+async def get_dashboard(kb_id: str, _: None = Depends(auth.check_api_key)):
+    kb = _get_kb_or_404(kb_id)
+    dashboard_path = Path(kb["graphify_out"], "dashboard.html")
+    if not dashboard_path.exists():
+        # Generate on-the-fly from analysis JSON or graph + domain analyzers
+        analysis_path = Path(kb["graphify_out"], ".aag_analysis.json")
+        if analysis_path.exists():
+            import json
+            from graphify.dashboard import render_dashboard
+            analysis = json.loads(analysis_path.read_text())
+            if not analysis.get("domain_analysis"):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No domain analysis for KB '{kb_id}'. Rebuild with --domain.",
+                )
+            G = ops._load_graph(kb["graphify_out"])
+            render_dashboard(analysis, {"nodes": len(G), "edges": G.size()}, dashboard_path, G=G)
+        else:
+            # Reconstruct from graph by running domain analyzers
+            domain_analysis = ops.run_domain_analyzers(kb["graphify_out"])
+            if not domain_analysis:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No domain nodes in KB '{kb_id}'. Rebuild with --domain.",
+                )
+            from graphify.dashboard import render_dashboard
+            G = ops._load_graph(kb["graphify_out"])
+            analysis = ops.build_full_analysis(kb["graphify_out"], G, domain_analysis)
+            render_dashboard(analysis, {"nodes": len(G), "edges": G.size()}, dashboard_path, G=G)
+    return dashboard_path.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
+@app.get("/kb/{kb_id}/search")
+async def search_kb(kb_id: str, q: str, limit: int = 20, _: None = Depends(auth.check_api_key)):
+    kb = _get_kb_or_404(kb_id)
+    from graphify.store import search as _search
+    hits = _search(kb["graphify_out"], q, limit=limit)
+    return {"query": q, "hits": hits}
 
 
 # ---------------------------------------------------------------------------

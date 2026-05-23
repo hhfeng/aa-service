@@ -134,7 +134,15 @@ def kb_stats(graphify_out: str) -> dict:
 
 def query_graph(graphify_out: str, question: str, mode: str = "bfs", budget: int = 2000) -> dict:
     G = _load_graph(graphify_out)
-    start_nodes = _score_nodes(G, question)
+    # Use FTS5 for seed selection when available, fall back to label matching
+    try:
+        from graphify.store import search as _fts_search
+        hits = _fts_search(graphify_out, question, limit=3)
+        start_nodes = [h["id"] for h in hits if h["id"] in G.nodes]
+    except Exception:
+        start_nodes = []
+    if not start_nodes:
+        start_nodes = _score_nodes(G, question)
 
     if not start_nodes:
         return {
@@ -175,8 +183,30 @@ def query_graph(graphify_out: str, question: str, mode: str = "bfs", budget: int
 
     terms = [t.lower() for t in re.split(r"\W+", question) if len(t) > 3]
 
-    def relevance(nid: str) -> int:
-        return sum(1 for t in terms if t in G.nodes[nid].get("label", "").lower())
+    # Build distance-from-best-seed map for ranking
+    _seed_set = set(start_nodes)
+    _dist: dict[str, int] = {n: 0 for n in start_nodes}
+    if mode != "dfs":
+        _layer = set(start_nodes)
+        _seen = set(start_nodes)
+        for depth in range(1, 4):
+            _next = set()
+            for n in _layer:
+                for nb in G.neighbors(n):
+                    if nb not in _seen:
+                        _dist[nb] = depth
+                        _seen.add(nb)
+                        _next.add(nb)
+            _layer = _next
+
+    def relevance(nid: str) -> float:
+        # Keyword match in label
+        kw = sum(1 for t in terms if t in G.nodes[nid].get("label", "").lower())
+        # Closeness to seeds (depth 0 = best)
+        dist = _dist.get(nid, 4)
+        # Seeds themselves get a bonus
+        seed_bonus = 2.0 if nid in _seed_set else 0.0
+        return kw + seed_bonus + (3 - dist) * 0.5
 
     ranked = sorted(subgraph_nodes, key=relevance, reverse=True)
     char_budget = budget * 4
@@ -437,7 +467,7 @@ def _do_update(kb_id: str, graphify_out: str, raw: str, job_id: str) -> None:
         "files": result.get("files", {}),
     }
     tokens = {"input": 0, "output": 0}
-    report = generate(G_final, communities, cohesion, labels, gods, surprises, detection, tokens, raw, suggested_questions=questions)
+    report = generate(G_final, communities, labels, gods, surprises, detection, tokens, raw, cohesion_scores=cohesion, suggested_questions=questions)
     Path(graphify_out, "GRAPH_REPORT.md").write_text(report)
 
     # Backend-aware save: respects whichever artifact exists in graphify_out.
@@ -458,3 +488,100 @@ def _do_update(kb_id: str, graphify_out: str, raw: str, job_id: str) -> None:
             "code_files_processed": len(expanded),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Domain analysis (for dashboard generation)
+# ---------------------------------------------------------------------------
+
+def build_full_analysis(graphify_out: str, G=None, domain_analysis: dict | None = None) -> dict:
+    """Build a complete analysis dict with god_nodes, surprises, communities, and domain_analysis."""
+    from graphify.analyze import god_nodes, surprising_connections
+    from graphify.cluster import cluster
+
+    if G is None:
+        G = _load_graph(graphify_out)
+
+    communities = cluster(G)
+    gods = god_nodes(G)
+    surprises = surprising_connections(G, communities)
+
+    # Build communities dict: {community_id: [node_labels]}
+    comm_dict = {}
+    for node, data in G.nodes(data=True):
+        c = data.get("community")
+        if c is not None:
+            comm_dict.setdefault(str(c), []).append(data.get("label", node))
+
+    analysis = {
+        "gods": gods,
+        "surprises": surprises,
+        "communities": comm_dict,
+    }
+    if domain_analysis:
+        analysis["domain_analysis"] = domain_analysis
+        # Synthesize risk narratives if domain findings exist
+        try:
+            from graphify.synthesize import synthesize_risks
+            red_flags = domain_analysis.get("diligence.red_flag_analyzer", [])
+            key_persons = domain_analysis.get("diligence.key_person_risk_analyzer", [])
+            if red_flags or key_persons:
+                analysis["synthesized_narratives"] = synthesize_risks(G, red_flags, key_persons)
+        except Exception:
+            pass  # LLM unavailable — skip gracefully
+
+    return analysis
+
+
+def run_domain_analyzers(graphify_out: str) -> dict[str, list]:
+    """Run domain analyzers on the loaded graph. Returns {analyzer_name: findings}.
+
+    Also synthesizes structural findings (god nodes, domain stats) so the
+    dashboard always has content even if formal analyzers find nothing.
+    """
+    G = _load_graph(graphify_out)
+
+    # Check if graph has any domain-tagged nodes
+    domain_nodes = [(n, d) for n, d in G.nodes(data=True) if d.get("domain")]
+    if not domain_nodes:
+        return {}
+
+    domains_present = {d.get("domain") for _, d in domain_nodes}
+    results: dict[str, list] = {}
+
+    # Run formal analyzers
+    try:
+        from graphify.domain import active_domains
+        specs = active_domains({"domains": list(domains_present)})
+        for spec in specs:
+            for analyzer in spec.analyzers:
+                try:
+                    findings = analyzer(G)
+                    if findings:
+                        name = f"{spec.name}.{analyzer.__name__}"
+                        results[name] = findings
+                except Exception:
+                    pass
+    except (ImportError, Exception):
+        pass
+
+    # Always include structural summary so dashboard has content
+    from collections import Counter
+    domain_counts = Counter(d.get("domain") for _, d in domain_nodes)
+    type_counts = Counter(d.get("type", "unknown") for _, d in domain_nodes)
+
+    # Top domain nodes by degree
+    top_nodes = sorted(
+        [(n, G.degree(n), data.get("label", n)) for n, data in domain_nodes],
+        key=lambda x: x[1],
+        reverse=True,
+    )[:10]
+
+    results["_summary"] = [{
+        "domains": dict(domain_counts),
+        "types": dict(type_counts),
+        "top_nodes": [{"id": n, "degree": d, "label": l} for n, d, l in top_nodes],
+        "total_domain_nodes": len(domain_nodes),
+    }]
+
+    return results

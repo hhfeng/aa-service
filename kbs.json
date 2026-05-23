@@ -13,5 +13,10 @@
     "name": "CVE Dashboard",
     "graphify_out": "/home/xfz/kb/cve_dashboard_kb/graphify-out",
     "raw": "/home/xfz/kb/cve_dashboard_kb/raw"
+  },
+  "wework_s1": {
+    "name": "WeWork S-1 Filing",
+    "graphify_out": "/local-nvme/hfeng/kb/graphify-ext/examples/wework-s1/graphify-out",
+    "raw": "/local-nvme/hfeng/kb/graphify-ext/examples/wework-s1/raw"
   }
 }

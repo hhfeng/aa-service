@@ -332,6 +332,36 @@ What **does** require a restart:
 | `POST` | `/kb/{kb_id}/save-result` | Write a Q&A result to `graphify-out/memory/` |
 | `POST` | `/kb/{kb_id}/update` | Trigger AST-only update job |
 | `POST` | `/kb/{kb_id}/add` | Fetch a URL into `raw/` |
+| `GET` | `/kb/{kb_id}/dashboard` | Analysis dashboard (HTML) for domain KBs |
 | `GET` | `/jobs/{job_id}` | Poll an async job |
 
 For full request/response schemas, hit `GET /` — the manifest documents every endpoint inline.
+
+---
+
+## Deploying from source zip
+
+The source zip (`aa-service-src.zip`) contains all `.py` files, tests, and config — but **not** `.git/` or `.venv/`. To deploy:
+
+```bash
+# 1. Clone the repo (skip if you already have a clone)
+git clone <remote-url> aa-service
+cd aa-service
+
+# 2. Unzip overtop — overwrites matching files with updated versions
+unzip -o /path/to/aa-service-src.zip
+
+# 3. Review changes
+git diff
+git status
+
+# 4. Commit and push
+git add -A
+git commit -m "feat: add dashboard endpoint"
+git push origin main
+```
+
+**Notes:**
+- `unzip -o` overwrites files that exist in both the zip and the clone. Files only in the clone are untouched.
+- To preview before overwriting: `unzip -l aa-service-src.zip`
+- To diff without overwriting: `unzip aa-service-src.zip -d /tmp/aa-new && diff -r . /tmp/aa-new`
